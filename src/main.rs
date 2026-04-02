@@ -54,6 +54,24 @@ pub fn child(binary: PathBuf, args: Vec<String>) {
     );
     nix::unistd::sethostname("container").unwrap();
 
+    if let Err(e) = std::fs::create_dir_all("/sys/fs/cgroup/container/") {
+        println!("Failed to create directory: {}", e);
+    }
+    if let Err(e) = std::fs::write(
+        "/sys/fs/cgroup/container/memory.max",
+        String::from("50000000"),
+    ) {
+        println!("Failed to write in memory.max: {}", e);
+    }
+    if let Err(e) = std::fs::write("/sys/fs/cgroup/container/memory.swap.max", 0.to_string()) {
+        println!("Failed to write in memory.swap.max: {}", e);
+    }
+    let id = std::process::id();
+
+    if let Err(e) = std::fs::write("/sys/fs/cgroup/container/cgroup.procs", id.to_string()) {
+        println!("Failed to write in cgroup.procs: {}", e)
+    }
+
     Command::new(binary)
         .arg("init")
         .args(args)
