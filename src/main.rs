@@ -1,6 +1,9 @@
 use std::os::unix::process::CommandExt;
 use std::{env, path::PathBuf, process::Command};
 
+use nix::mount::{MsFlags, mount};
+use nix::sched::CloneFlags;
+
 fn main() {
     let mut args = env::args();
 
@@ -16,10 +19,10 @@ fn main() {
     match x {
         Some(cmd) => match cmd.as_str() {
             "run" => {
-                println!("In the run block");
                 let _child = run(current_exe, a).wait().expect("Failed to wait");
             }
-            "child" => child(a),
+            "child" => child(current_exe, a),
+            "init" => init(a),
             _ => println!("Error whith the command"),
         },
         None => {
@@ -36,13 +39,39 @@ pub fn run(binary: PathBuf, args: Vec<String>) -> std::process::Child {
         .expect("Failed to spawn")
 }
 
-pub fn child(args: Vec<String>) {
-    if let Err(e) = nix::unistd::chroot("./rootfs") {
-        println!("Error occured while setting root dir: {}", e);
+pub fn child(binary: PathBuf, args: Vec<String>) {
+    if let Err(e) = nix::sched::unshare(
+        CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWPID,
+    ) {
+        println!("Error occured while setting CloneFlags - newuts: {}", e);
     }
-    if let Err(e) = nix::unistd::chdir("/") {
-        println!("Error while setting current working dir: {}", e);
-    }
+    let _ = mount(
+        None::<&str>,
+        "/",
+        None::<&str>,
+        MsFlags::MS_PRIVATE | MsFlags::MS_REC,
+        None::<&str>,
+    );
+    nix::unistd::sethostname("container").unwrap();
+
+    Command::new(binary)
+        .arg("init")
+        .args(args)
+        .spawn()
+        .expect("failed to spawn init")
+        .wait()
+        .expect("failed to wait");
+}
+
+pub fn init(args: Vec<String>) {
+    nix::unistd::chroot("./rootfs").unwrap();
+    nix::unistd::chdir("/").unwrap();
+
+    let flags = MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV;
+
+    mount(Some("proc"), "/proc", Some("proc"), flags, None::<&str>).unwrap();
+
     let cmd = &args[0];
-    let _ = Command::new(cmd).args(&args[1..]).exec();
+
+    Command::new(cmd).args(&args[1..]).exec();
 }
