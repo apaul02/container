@@ -8,6 +8,7 @@ A lightweight, from-scratch Linux container runtime built entirely in Rust. This
 - **Process Isolation (Namespaces):** Utilizes Linux `clone/unshare` syscalls to isolate UTS (Hostname), Mount, and PID namespaces.
 - **Resource Limiting (Cgroups v2):** Dynamically provisions control groups to restrict memory usage and disable swap space, preventing host starvation.
 - **Image Layering (OverlayFS):** Implements a Union Filesystem to allow multiple containers to share a single read-only base image while maintaining their own isolated read-write state.
+- **Process Lifecycle Management**: Built a detached daemon mode and a `ps` and `rm` command to remove or see current active containers and also can run containers in detached mode `-d`.
 
 ## Prerequisites
 
@@ -60,7 +61,7 @@ This runtime utilizes a three-stage process execution model to bypass Linux kern
 
 ## Future Additions
 
-- [ ] The `ps` command.
-- [ ] `-d` detached mode.
+- [x] The `ps` command.
+- [x] `-d` detached mode.
 - [ ] More security `caps` crate.
 - [ ] Give Internet.

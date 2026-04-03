@@ -1,8 +1,11 @@
+use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
 use std::{env, path::PathBuf, process::Command};
 
 use nix::mount::{MsFlags, mount};
 use nix::sched::CloneFlags;
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 
 fn main() {
     let mut args = env::args();
@@ -21,6 +24,8 @@ fn main() {
             "run" => run(current_exe, a),
             "child" => child(current_exe, a),
             "init" => init(a),
+            "ps" => ps_command(),
+            "rm" => rm_command(a),
             _ => println!("Error whith the command"),
         },
         None => {
@@ -29,7 +34,7 @@ fn main() {
     }
 }
 
-pub fn run(binary: PathBuf, args: Vec<String>) {
+pub fn run(binary: PathBuf, mut args: Vec<String>) {
     let id = std::process::id().to_string();
 
     let container_dir = format!("./containers/{}", id);
@@ -42,6 +47,13 @@ pub fn run(binary: PathBuf, args: Vec<String>) {
             println!("Failed to created dirs: {}", e);
         }
     }
+
+    let mut detached_mode = false;
+    if let Some(pos) = args.iter().position(|x| x == "-d" || x == "-detach") {
+        args.remove(pos);
+        detached_mode = true;
+        println!("running in detached mode");
+    };
     let mut child = Command::new(binary)
         .arg("child")
         .arg(&id)
@@ -49,11 +61,22 @@ pub fn run(binary: PathBuf, args: Vec<String>) {
         .spawn()
         .expect("Failed to spawn");
 
-    child.wait().expect("Failed to wait on child");
-
-    println!("Container has stopped. Cleaning up {}..", container_dir);
-    if let Err(e) = std::fs::remove_dir_all(&container_dir) {
-        println!("Failed to remove container directory: {}", e);
+    if detached_mode {
+        let registry = "./containers/registry";
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(registry)
+            .unwrap();
+        use std::io::Write;
+        writeln!(file, "{}", id).unwrap();
+        println!("Container {} started in background.", id);
+    } else {
+        child.wait().expect("Failed to wait on child");
+        println!("Container stopped. Cleaning up {}..", container_dir);
+        if let Err(e) = std::fs::remove_dir_all(&container_dir) {
+            println!("Failed to remove {}: {}", container_dir, e);
+        }
     }
 }
 
@@ -128,4 +151,67 @@ pub fn init(args: Vec<String>) {
     let cmd = &args[1];
 
     let _ = Command::new(cmd).args(&args[2..]).exec();
+}
+
+fn ps_command() {
+    let mut pids = HashSet::new();
+
+    for entry in std::fs::read_dir("/proc").unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+
+        if let Ok(pid) = name.parse::<u32>() {
+            pids.insert(pid);
+        }
+    }
+
+    for entry in std::fs::read_dir("./containers").unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+
+        if path.is_dir() {
+            if let Some(name) = path.file_name() {
+                let name = name.to_string_lossy();
+
+                if let Ok(pid) = name.parse::<u32>() {
+                    if pids.contains(&pid) {
+                        println!("Current Containers: {}", pid);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn rm_command(args: Vec<String>) {
+    if args.is_empty() {
+        println!("Please provide a container ID to remove. (e.g., cargo run -- rm 1234)");
+        return;
+    }
+    let id = &args[0];
+    let container_dir = format!("./containers/{}", id);
+    if let Ok(pid) = id.parse::<i32>() {
+        if let Err(e) = kill(Pid::from_raw(pid), Signal::SIGKILL) {
+            println!("Failed to kill container {}: {}", id, e);
+        } else {
+            println!("Killed container {}", id);
+        }
+    }
+    if let Err(e) = std::fs::remove_dir_all(&container_dir) {
+        println!("Failed to remove {}: {}", container_dir, e);
+    } else {
+        println!("Removed {}", container_dir);
+    }
+
+    let registry = "./containers/registry";
+
+    if let Ok(contents) = std::fs::read_to_string(registry) {
+        let updated: String = contents
+            .lines()
+            .filter(|line| *line != id)
+            .map(|line| format!("{}\n", line))
+            .collect();
+        std::fs::write(registry, updated).unwrap();
+    }
 }
